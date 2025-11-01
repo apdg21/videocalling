@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Family Video Call3</title>
+  <title>Family Video Call - Enhanced Layout</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -22,17 +21,103 @@
     .remote-video {
       transform: scaleX(1); /* Don't mirror remote videos */
     }
+    
+    /* Enhanced video grid styles */
+    #videoGrid {
+      display: grid;
+      gap: 12px;
+      transition: all 0.3s ease;
+    }
+    
+    .video-item {
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    
+    .video-item.active-speaker {
+      box-shadow: 0 0 0 2px #3b82f6, 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .video-item .audio-level {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background-color: #3b82f6;
+      width: 0%;
+      transition: width 0.1s ease;
+    }
+    
+    .video-item .speaking-indicator {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background-color: #10B981;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    
+    .video-item.speaking .speaking-indicator {
+      opacity: 1;
+    }
+    
+    /* Layout modes */
+    .layout-grid {
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+    
+    .layout-focus {
+      grid-template-columns: 2fr 1fr;
+      grid-template-rows: 1fr 1fr;
+    }
+    
+    .layout-focus .video-item:first-child {
+      grid-row: span 2;
+    }
+    
+    .layout-sidebar {
+      grid-template-columns: 3fr 1fr;
+    }
+    
+    .layout-sidebar .video-item:first-child {
+      grid-row: span 2;
+    }
+    
+    .layout-sidebar .sidebar-videos {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
   </style>
 </head>
 <body class="bg-gray-900 text-white">
   <!-- Header -->
-  <header class="bg-gray-800 p-4 shadow-md flex justify-between">
+  <header class="bg-gray-800 p-4 shadow-md flex justify-between items-center">
     <h1 class="text-2xl font-bold flex items-center">
       <i class="fas fa-users mr-2 text-blue-400"></i> Family Video Call
     </h1>
-    <div id="connectionStatus" class="flex items-center">
-      <span class="h-3 w-3 rounded-full status-disconnected mr-2"></span>
-      <span>Disconnected</span>
+    <div class="flex items-center gap-4">
+      <div id="layoutControls" class="hidden">
+        <button id="gridLayoutBtn" class="bg-gray-700 hover:bg-gray-600 p-2 rounded-lg" title="Grid Layout">
+          <i class="fas fa-th"></i>
+        </button>
+        <button id="focusLayoutBtn" class="bg-gray-700 hover:bg-gray-600 p-2 rounded-lg" title="Focus Layout">
+          <i class="fas fa-user"></i>
+        </button>
+        <button id="sidebarLayoutBtn" class="bg-gray-700 hover:bg-gray-600 p-2 rounded-lg" title="Sidebar Layout">
+          <i class="fas fa-columns"></i>
+        </button>
+      </div>
+      <div id="connectionStatus" class="flex items-center">
+        <span class="h-3 w-3 rounded-full status-disconnected mr-2"></span>
+        <span>Disconnected</span>
+      </div>
     </div>
   </header>
 
@@ -62,7 +147,7 @@
           </button>
         </div>
       </div>
-      <div id="videoGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div id="videoGrid" class="layout-grid">
         <div class="text-center text-gray-500 py-8 col-span-2">
           <i class="fas fa-video text-4xl mb-4"></i>
           <p>Join a room to start video calling</p>
@@ -105,6 +190,10 @@ const chatMessages = document.getElementById('chatMessages');
 const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
 const connectionStatus = document.getElementById('connectionStatus');
+const layoutControls = document.getElementById('layoutControls');
+const gridLayoutBtn = document.getElementById('gridLayoutBtn');
+const focusLayoutBtn = document.getElementById('focusLayoutBtn');
+const sidebarLayoutBtn = document.getElementById('sidebarLayoutBtn');
 
 // State variables
 let myStream = null;
@@ -114,6 +203,9 @@ let currentRoom = null;
 let myDisplayName = 'User';
 const peers = {};
 const userDisplayNames = {};
+let activeSpeaker = null;
+let currentLayout = 'grid'; // 'grid', 'focus', 'sidebar'
+const audioLevels = {}; // Track audio levels for each user
 
 // Update connection status
 function updateConnectionStatus(status) {
@@ -146,6 +238,9 @@ async function initMedia() {
     toggleVideoBtn.classList.add('bg-green-600');
     toggleAudioBtn.classList.add('bg-green-600');
     
+    // Show layout controls
+    layoutControls.classList.remove('hidden');
+    
     return true;
   } catch (err) {
     console.error('Media error', err);
@@ -162,8 +257,9 @@ function addVideoStream(stream, userName, type, userId) {
   removeVideoStream(idKey);
   
   const container = document.createElement('div');
-  container.className = 'relative bg-black rounded-lg overflow-hidden video-container';
+  container.className = `video-item ${type === 'local' ? 'local-video' : 'remote-video'}`;
   container.id = `video-${idKey}`;
+  container.dataset.userId = userId;
   
   const video = document.createElement('video');
   video.srcObject = stream;
@@ -175,6 +271,9 @@ function addVideoStream(stream, userName, type, userId) {
     video.style.transform = 'scaleX(-1)'; // Mirror for self-view
   } else {
     video.classList.add('remote-video');
+    
+    // Set up audio analysis for remote streams
+    setupAudioAnalysis(video, userId);
   }
   
   video.className = 'w-full h-full object-cover';
@@ -196,14 +295,27 @@ function addVideoStream(stream, userName, type, userId) {
     <span class="h-3 w-3 rounded-full ${type === 'local' ? (isAudioOn ? 'bg-green-500' : 'bg-red-500') : 'bg-green-500'}"></span>
   `;
   
+  // Add speaking indicator
+  const speakingIndicator = document.createElement('div');
+  speakingIndicator.className = 'speaking-indicator';
+  
+  // Add audio level indicator
+  const audioLevel = document.createElement('div');
+  audioLevel.className = 'audio-level';
+  
   container.appendChild(video);
   container.appendChild(label);
   container.appendChild(status);
+  container.appendChild(speakingIndicator);
+  container.appendChild(audioLevel);
   videoGrid.appendChild(container);
   
   // Remove placeholder if it exists
   const placeholder = videoGrid.querySelector('.text-center');
   if (placeholder) placeholder.remove();
+  
+  // Update layout
+  updateVideoLayout();
   
   console.log(`✅ Added ${type} video stream for ${userName}`);
 }
@@ -212,6 +324,239 @@ function addVideoStream(stream, userName, type, userId) {
 function removeVideoStream(idKey) {
   const el = document.getElementById(`video-${idKey}`);
   if (el) el.remove();
+  
+  // Update layout
+  updateVideoLayout();
+}
+
+// Set up audio analysis for remote streams
+function setupAudioAnalysis(videoElement, userId) {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const analyser = audioContext.createAnalyser();
+  const source = audioContext.createMediaStreamSource(videoElement.srcObject);
+  
+  source.connect(analyser);
+  analyser.fftSize = 256;
+  
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  
+  // Store analyser for this user
+  audioLevels[userId] = {
+    analyser: analyser,
+    dataArray: dataArray,
+    level: 0
+  };
+  
+  // Start analyzing audio
+  analyzeAudio(userId);
+}
+
+// Analyze audio levels for a user
+function analyzeAudio(userId) {
+  if (!audioLevels[userId]) return;
+  
+  const { analyser, dataArray } = audioLevels[userId];
+  analyser.getByteFrequencyData(dataArray);
+  
+  // Calculate average volume
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) {
+    sum += dataArray[i];
+  }
+  const average = sum / dataArray.length;
+  
+  // Normalize to 0-1 range
+  const normalizedLevel = Math.min(average / 128, 1);
+  audioLevels[userId].level = normalizedLevel;
+  
+  // Update UI if this user is speaking
+  updateAudioIndicator(userId, normalizedLevel);
+  
+  // Check if this user should be the active speaker
+  if (normalizedLevel > 0.1) {
+    setActiveSpeaker(userId);
+  }
+  
+  // Continue analyzing
+  requestAnimationFrame(() => analyzeAudio(userId));
+}
+
+// Update audio indicator for a user
+function updateAudioIndicator(userId, level) {
+  const videoElement = document.getElementById(`video-${userId === socket.id ? 'local' : userId}`);
+  if (!videoElement) return;
+  
+  const audioLevelBar = videoElement.querySelector('.audio-level');
+  const speakingIndicator = videoElement.querySelector('.speaking-indicator');
+  
+  if (audioLevelBar) {
+    audioLevelBar.style.width = `${level * 100}%`;
+  }
+  
+  // Show speaking indicator if audio level is above threshold
+  if (level > 0.1) {
+    videoElement.classList.add('speaking');
+  } else {
+    videoElement.classList.remove('speaking');
+  }
+}
+
+// Set active speaker
+function setActiveSpeaker(userId) {
+  // Don't change if it's the same speaker
+  if (activeSpeaker === userId) return;
+  
+  // Remove active class from previous speaker
+  if (activeSpeaker) {
+    const prevVideo = document.getElementById(`video-${activeSpeaker === socket.id ? 'local' : activeSpeaker}`);
+    if (prevVideo) {
+      prevVideo.classList.remove('active-speaker');
+    }
+  }
+  
+  // Set new active speaker
+  activeSpeaker = userId;
+  const currentVideo = document.getElementById(`video-${userId === socket.id ? 'local' : userId}`);
+  if (currentVideo) {
+    currentVideo.classList.add('active-speaker');
+  }
+  
+  // Update layout if in focus mode
+  if (currentLayout === 'focus') {
+    updateVideoLayout();
+  }
+}
+
+// Update video layout based on current mode
+function updateVideoLayout() {
+  const videoItems = Array.from(videoGrid.querySelectorAll('.video-item'));
+  const videoCount = videoItems.length;
+  
+  // Clear existing layout classes
+  videoGrid.className = '';
+  
+  if (videoCount === 0) return;
+  
+  // Apply layout based on current mode
+  switch (currentLayout) {
+    case 'grid':
+      videoGrid.classList.add('layout-grid');
+      // All videos are equal size in grid mode
+      videoItems.forEach(item => {
+        item.style.gridColumn = '';
+        item.style.gridRow = '';
+      });
+      break;
+      
+    case 'focus':
+      videoGrid.classList.add('layout-focus');
+      
+      if (videoCount === 1) {
+        // Single video takes full space
+        videoItems[0].style.gridColumn = '1 / -1';
+        videoItems[0].style.gridRow = '1 / -1';
+      } else {
+        // Active speaker gets the main area, others in smaller areas
+        const activeVideo = activeSpeaker ? 
+          document.getElementById(`video-${activeSpeaker === socket.id ? 'local' : activeSpeaker}`) : 
+          videoItems[0];
+          
+        if (activeVideo) {
+          // Move active video to first position
+          videoGrid.prepend(activeVideo);
+          activeVideo.style.gridColumn = '1';
+          activeVideo.style.gridRow = '1 / span 2';
+          
+          // Arrange other videos
+          const otherVideos = videoItems.filter(item => item !== activeVideo);
+          otherVideos.forEach((video, index) => {
+            video.style.gridColumn = '2';
+            video.style.gridRow = `${index + 1}`;
+          });
+        }
+      }
+      break;
+      
+    case 'sidebar':
+      videoGrid.classList.add('layout-sidebar');
+      
+      if (videoCount === 1) {
+        // Single video takes full space
+        videoItems[0].style.gridColumn = '1 / -1';
+        videoItems[0].style.gridRow = '1 / -1';
+      } else {
+        // First video gets the main area, others in sidebar
+        const mainVideo = activeSpeaker ? 
+          document.getElementById(`video-${activeSpeaker === socket.id ? 'local' : activeSpeaker}`) : 
+          videoItems[0];
+          
+        if (mainVideo) {
+          // Move main video to first position
+          videoGrid.prepend(mainVideo);
+          mainVideo.style.gridColumn = '1';
+          mainVideo.style.gridRow = '1 / span 2';
+          
+          // Create sidebar container for other videos
+          const sidebarContainer = document.createElement('div');
+          sidebarContainer.className = 'sidebar-videos';
+          sidebarContainer.style.gridColumn = '2';
+          sidebarContainer.style.gridRow = '1 / span 2';
+          
+          // Add other videos to sidebar
+          const otherVideos = videoItems.filter(item => item !== mainVideo);
+          otherVideos.forEach(video => {
+            sidebarContainer.appendChild(video);
+          });
+          
+          videoGrid.appendChild(sidebarContainer);
+        }
+      }
+      break;
+  }
+}
+
+// Layout control handlers
+gridLayoutBtn.addEventListener('click', () => {
+  currentLayout = 'grid';
+  updateLayoutButtons();
+  updateVideoLayout();
+});
+
+focusLayoutBtn.addEventListener('click', () => {
+  currentLayout = 'focus';
+  updateLayoutButtons();
+  updateVideoLayout();
+});
+
+sidebarLayoutBtn.addEventListener('click', () => {
+  currentLayout = 'sidebar';
+  updateLayoutButtons();
+  updateVideoLayout();
+});
+
+function updateLayoutButtons() {
+  // Reset all buttons
+  [gridLayoutBtn, focusLayoutBtn, sidebarLayoutBtn].forEach(btn => {
+    btn.classList.remove('bg-blue-600');
+    btn.classList.add('bg-gray-700');
+  });
+  
+  // Highlight active layout button
+  switch (currentLayout) {
+    case 'grid':
+      gridLayoutBtn.classList.remove('bg-gray-700');
+      gridLayoutBtn.classList.add('bg-blue-600');
+      break;
+    case 'focus':
+      focusLayoutBtn.classList.remove('bg-gray-700');
+      focusLayoutBtn.classList.add('bg-blue-600');
+      break;
+    case 'sidebar':
+      sidebarLayoutBtn.classList.remove('bg-gray-700');
+      sidebarLayoutBtn.classList.add('bg-blue-600');
+      break;
+  }
 }
 
 // Create peer connection
@@ -349,6 +694,9 @@ leaveBtn.addEventListener('click', () => {
     }
   });
   
+  // Hide layout controls
+  layoutControls.classList.add('hidden');
+  
   // Enable join controls
   joinBtn.disabled = false;
   roomNameInput.disabled = false;
@@ -356,6 +704,7 @@ leaveBtn.addEventListener('click', () => {
   
   updateConnectionStatus('disconnected');
   currentRoom = null;
+  activeSpeaker = null;
 });
 
 // Socket event handlers
@@ -437,6 +786,13 @@ socket.on('user-disconnected', (userId) => {
   
   removeVideoStream(userId);
   delete userDisplayNames[userId];
+  delete audioLevels[userId];
+  
+  // If the active speaker left, reset active speaker
+  if (activeSpeaker === userId) {
+    activeSpeaker = null;
+    updateVideoLayout();
+  }
 });
 
 // Chat functionality
@@ -530,6 +886,9 @@ toggleAudioBtn.addEventListener('click', () => {
     }
   }
 });
+
+// Initialize layout buttons
+updateLayoutButtons();
 
 // Debug info
 setInterval(() => {
