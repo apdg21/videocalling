@@ -105,25 +105,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('leave-room', (roomName) => {
-    try {
-      const room = rooms.get(roomName);
-      if (room && room.has(socket.id)) {
-        const userName = room.get(socket.id).displayName;
-        room.delete(socket.id);
-        socket.leave(roomName);
-        console.log(`⬅️ ${socket.id} (${userName}) left room ${roomName}`);
-        socket.to(roomName).emit('user-disconnected', socket.id);
-        if (room.size === 0) {
-          rooms.delete(roomName);
-          console.log(`🗑️ Room ${roomName} deleted (empty)`);
-        }
-      }
-    } catch (err) {
-      console.error('❌ Error leave-room:', err);
-    }
-  });
-
   socket.on('request-reconnect', (data) => {
     console.log(`🔄 ${socket.id} requesting reconnect with ${data.targetUser}`);
     socket.to(data.targetUser).emit('reconnect-request', {

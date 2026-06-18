@@ -178,26 +178,6 @@
 // Use relative path for socket.io - it will automatically connect to the same server
 const socket = io();
 
-// ICE server configuration.
-// STUN servers alone are NOT enough for reliable calls between two
-// different home/mobile networks - if either side is behind a symmetric
-// NAT, CGNAT (common on mobile carriers and some ISPs), or a strict
-// firewall, STUN-only peers will simply fail to find a direct path and
-// the call will silently have no video/audio for that person. This is
-// the single most common cause of "works for some people, not others."
-// Add a TURN server below to fix it - e.g. a free tier from
-// Cloudflare Realtime TURN, Metered Open Relay, or ExpressTURN, or your
-// own self-hosted coturn instance. Example once you have credentials:
-//   { urls: 'turn:your-turn-host:3478', username: 'user', credential: 'pass' }
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' }
-  // ,{ urls: 'turn:your-turn-host:3478', username: 'user', credential: 'pass' }
-];
-
 // DOM Elements
 const videoGrid = document.getElementById('videoGrid');
 const roomNameInput = document.getElementById('roomName');
@@ -222,7 +202,6 @@ let isAudioOn = true;
 let currentRoom = null;
 let myDisplayName = 'User';
 const peers = {};
-const pendingCandidates = {}; // ICE candidates received before remoteDescription was ready
 const userDisplayNames = {};
 let activeSpeaker = null;
 let currentLayout = 'grid'; // 'grid', 'focus', 'sidebar'
@@ -364,7 +343,6 @@ function setupAudioAnalysis(videoElement, userId) {
   
   // Store analyser for this user
   audioLevels[userId] = {
-    audioContext: audioContext,
     analyser: analyser,
     dataArray: dataArray,
     level: 0
@@ -586,7 +564,13 @@ function createPeerConnection(userId) {
   console.log(`🔗 Creating peer connection for ${userId}`);
   
   const peerConnection = new RTCPeerConnection({
-    iceServers: ICE_SERVERS
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' }
+    ]
   });
 
   // Add local tracks to the connection
@@ -599,24 +583,15 @@ function createPeerConnection(userId) {
   // Handle incoming tracks
   peerConnection.ontrack = (event) => {
     console.log(`📹 Received remote track from ${userId}`, event.streams);
-
+    
     if (event.streams && event.streams[0]) {
       const remoteStream = event.streams[0];
-      const idKey = userId;
-
-      // Audio and video tracks fire ontrack separately even though they
-      // belong to the same MediaStream. If we already built the video
-      // tile for this peer, just let the existing <video> element's
-      // srcObject (which is the same MediaStream object) pick up the
-      // new track - rebuilding the element every time caused flicker
-      // and could leave a tile attached to a half-populated stream.
-      const existing = document.getElementById(`video-${idKey}`);
-      if (existing) {
-        return;
-      }
-
-      const displayName = userDisplayNames[userId] || `User ${userId.substring(0, 6)}`;
-      addVideoStream(remoteStream, displayName, 'remote', userId);
+      
+      // Wait a bit for the stream to be ready
+      setTimeout(() => {
+        const displayName = userDisplayNames[userId] || `User ${userId.substring(0, 6)}`;
+        addVideoStream(remoteStream, displayName, 'remote', userId);
+      }, 100);
     }
   };
 
@@ -641,25 +616,6 @@ function createPeerConnection(userId) {
   };
 
   return peerConnection;
-}
-
-// Apply any ICE candidates that arrived before the remote description
-// was ready (instead of dropping them, which can leave a connection
-// stuck with no media path).
-async function flushPendingCandidates(userId) {
-  const queued = pendingCandidates[userId];
-  const pc = peers[userId];
-  if (!queued || !queued.length || !pc) return;
-  delete pendingCandidates[userId];
-
-  for (const candidate of queued) {
-    try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      console.log('✅ Added queued ICE candidate for', userId);
-    } catch (error) {
-      console.error('Error adding queued ICE candidate:', error);
-    }
-  }
 }
 
 // Create and send offer
@@ -768,30 +724,17 @@ socket.on('room-joined', (users) => {
 socket.on('user-connected', (userData) => {
   console.log('👋 New user joined:', userData);
   userDisplayNames[userData.id] = userData.displayName;
-  // Note: we deliberately do NOT create an offer here. The new joiner
-  // (see 'room-joined' handler below) is responsible for sending offers
-  // to everyone already in the room. If both sides created offers at the
-  // same time, two separate RTCPeerConnections would race against each
-  // other and the loser's tracks would silently never arrive - which is
-  // exactly the "sometimes no video" symptom.
+  createAndSendOffer(userData.id);
 });
 
 socket.on('offer', async (data) => {
   console.log('📨 Received offer from', data.from);
   
   try {
-    // If we already had a connection for this peer (e.g. a reconnect),
-    // close it cleanly first instead of silently overwriting/leaking it.
-    if (peers[data.from]) {
-      peers[data.from].close();
-      delete peers[data.from];
-    }
-
     const peerConnection = createPeerConnection(data.from);
     peers[data.from] = peerConnection;
     
     await peerConnection.setRemoteDescription(data.offer);
-    await flushPendingCandidates(data.from);
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     
@@ -813,7 +756,6 @@ socket.on('answer', async (data) => {
   try {
     if (peers[data.from]) {
       await peers[data.from].setRemoteDescription(data.answer);
-      await flushPendingCandidates(data.from);
       console.log('✅ Set remote description for', data.from);
     }
   } catch (error) {
@@ -825,17 +767,9 @@ socket.on('ice-candidate', async (data) => {
   console.log('❄️ Received ICE candidate from', data.from);
   
   try {
-    const pc = peers[data.from];
-    if (!pc || !data.candidate) return;
-
-    if (pc.remoteDescription && pc.remoteDescription.type) {
-      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    if (peers[data.from] && data.candidate) {
+      await peers[data.from].addIceCandidate(new RTCIceCandidate(data.candidate));
       console.log('✅ Added ICE candidate for', data.from);
-    } else {
-      // Remote description isn't set yet - queue it for flushPendingCandidates()
-      if (!pendingCandidates[data.from]) pendingCandidates[data.from] = [];
-      pendingCandidates[data.from].push(data.candidate);
-      console.log('⏳ Queued early ICE candidate for', data.from);
     }
   } catch (error) {
     console.error('Error adding ICE candidate:', error);
@@ -849,14 +783,10 @@ socket.on('user-disconnected', (userId) => {
     peers[userId].close();
     delete peers[userId];
   }
-  delete pendingCandidates[userId];
   
   removeVideoStream(userId);
   delete userDisplayNames[userId];
-  if (audioLevels[userId]) {
-    audioLevels[userId].audioContext.close().catch(() => {});
-    delete audioLevels[userId];
-  }
+  delete audioLevels[userId];
   
   // If the active speaker left, reset active speaker
   if (activeSpeaker === userId) {
