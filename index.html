@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Family Video Call - Enhanced Layout</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://videocalling-kyxa.onrender.com/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     .video-container { aspect-ratio: 16/9; }
@@ -175,8 +175,17 @@
   </main>
 
 <script>
-// Use relative path for socket.io - it will automatically connect to the same server
-const socket = io();
+// ============================================================
+// Backend connection - the Socket.IO server now lives on Render,
+// NOT on this Cloudflare Pages origin. We must connect to it
+// explicitly (relative io() only works when frontend + backend
+// share an origin, which is no longer the case).
+// ============================================================
+const BACKEND_URL = 'https://videocalling-kyxa.onrender.com';
+
+const socket = io(BACKEND_URL, {
+  transports: ['websocket', 'polling'] // try websocket first, fall back to polling
+});
 
 // ICE server configuration.
 // STUN servers alone are NOT enough for reliable calls between two
